@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ble-tracker-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: ble_tracker
+      MYSQL_USER: bleuser
+      MYSQL_PASSWORD: blepassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - ble-tracker-network
+
+volumes:
+  mysql_data:
+
+networks:
+  ble-tracker-network:
+    driver: bridge
