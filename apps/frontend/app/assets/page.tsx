@@ -9,6 +9,7 @@ interface Asset {
     macAddress: string;
     type: string;
     isBeacon: boolean;
+    description?: string;
     assetPresences: Array<{
         room: {
             id: number;
@@ -71,11 +72,17 @@ export default function AssetsPage() {
     const [historyLoading, setHistoryLoading] = useState(false);
     const [historyRoomId, setHistoryRoomId] = useState<number | null>(null);
 
-    // Tagging Modal
+    // Modal
+    const [isRegModalOpen, setIsRegModalOpen] = useState(false);
+    const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
     const [taggingDevice, setTaggingDevice] = useState<DiscoveredDevice | null>(null);
-    const [tagName, setTagName] = useState('');
-    const [tagType, setTagType] = useState('phone');
-    const [isBeacon, setIsBeacon] = useState(false);
+    const [formData, setFormData] = useState({
+        macAddress: '', // Needed for manual entry
+        name: '',
+        type: 'phone',
+        isBeacon: false,
+        description: ''
+    });
     const [submitting, setSubmitting] = useState(false);
 
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -98,10 +105,7 @@ export default function AssetsPage() {
     const fetchAssets = async () => {
         try {
             const res = await fetch(`${API_URL}/api/assets`);
-            if (res.ok) {
-                const data = await res.json();
-                setAssets(data);
-            }
+            if (res.ok) setAssets(await res.json());
         } catch (error) {
             console.error('Error fetching assets:', error);
         }
@@ -145,11 +149,8 @@ export default function AssetsPage() {
             if (res.ok) {
                 const data = await res.json();
                 setHistory(data);
-                // Set default room to the most recent presence
                 if (data.presences && data.presences.length > 0) {
                     setHistoryRoomId(data.presences[0].room.id);
-                } else if (data.logs && data.logs.length > 0) {
-                    setHistoryRoomId(data.logs[0].scannerNode.room.id);
                 }
             }
         } catch (error) {
@@ -159,44 +160,86 @@ export default function AssetsPage() {
         }
     };
 
-    const handleTagAsset = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!taggingDevice || !tagName) return;
+    const handleOpenEdit = (asset: Asset) => {
+        setEditingAsset(asset);
+        setFormData({
+            macAddress: asset.macAddress,
+            name: asset.name,
+            type: asset.type,
+            isBeacon: asset.isBeacon,
+            description: asset.description || ''
+        });
+        setIsRegModalOpen(true);
+    };
 
+    const handleOpenTag = (device: DiscoveredDevice) => {
+        setTaggingDevice(device);
+        setFormData({
+            macAddress: device.macAddress,
+            name: '',
+            type: 'phone',
+            isBeacon: false,
+            description: ''
+        });
+        setIsRegModalOpen(true);
+    };
+
+    const handleOpenManual = () => {
+        setTaggingDevice(null);
+        setEditingAsset(null);
+        setFormData({
+            macAddress: '',
+            name: '',
+            type: 'phone',
+            isBeacon: false,
+            description: ''
+        });
+        setIsRegModalOpen(true);
+    };
+
+    const handleSaveAsset = async (e: React.FormEvent) => {
+        e.preventDefault();
         setSubmitting(true);
         try {
-            const res = await fetch(`${API_URL}/api/assets`, {
-                method: 'POST',
+            const isEditing = !!editingAsset;
+            const url = isEditing ? `${API_URL}/api/assets/${editingAsset.id}` : `${API_URL}/api/assets`;
+            const method = isEditing ? 'PUT' : 'POST';
+
+            const res = await fetch(url, {
+                method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    macAddress: taggingDevice.macAddress,
-                    name: tagName,
-                    type: tagType,
-                    isBeacon: isBeacon
-                })
+                body: JSON.stringify(formData)
             });
 
             if (res.ok) {
+                setIsRegModalOpen(false);
+                setEditingAsset(null);
                 setTaggingDevice(null);
-                setTagName('');
-                setActiveTab('registered');
                 fetchAssets();
+                if (!isEditing) setActiveTab('registered');
             }
         } catch (error) {
-            console.error('Error tagging asset:', error);
+            console.error('Error saving asset:', error);
         } finally {
             setSubmitting(false);
         }
     };
 
-    // Calculate Path for the selected room
+    const handleDeleteAsset = async (id: number) => {
+        if (!confirm('Are you sure you want to delete this asset? Tracking history will be preserved as "Unknown".')) return;
+        try {
+            const res = await fetch(`${API_URL}/api/assets/${id}`, { method: 'DELETE' });
+            if (res.ok) fetchAssets();
+        } catch (error) {
+            console.error('Error deleting asset:', error);
+        }
+    };
+
     const historyPath = useMemo(() => {
         if (!history || !historyRoomId) return [];
-
         const roomLogs = history.logs.filter(log => log.scannerNode.room.id === historyRoomId);
         if (roomLogs.length === 0) return [];
 
-        // Group logs by 10-second windows to estimate position points
         const windows: { [key: string]: typeof roomLogs } = {};
         roomLogs.forEach(log => {
             const time = new Date(log.timestamp).getTime();
@@ -205,11 +248,9 @@ export default function AssetsPage() {
             windows[windowKey].push(log);
         });
 
-        // Estimate position for each window
-        const points = Object.keys(windows).sort().map(key => {
+        return Object.keys(windows).sort().map(key => {
             const logs = windows[key];
             let totalX = 0, totalY = 0, totalWeight = 0;
-
             logs.forEach(log => {
                 const scanner = allScanners.find(s => s.id === log.scannerNodeId);
                 if (scanner) {
@@ -219,12 +260,9 @@ export default function AssetsPage() {
                     totalWeight += weight;
                 }
             });
-
             if (totalWeight === 0) return null;
             return { x: totalX / totalWeight, y: totalY / totalWeight, timestamp: new Date(parseInt(key)).toISOString() };
         }).filter(p => p !== null) as { x: number; y: number; timestamp: string }[];
-
-        return points;
     }, [history, historyRoomId, allScanners]);
 
     const filteredAssets = assets.filter(asset =>
@@ -252,358 +290,247 @@ export default function AssetsPage() {
     if (loading && activeTab === 'registered') {
         return (
             <div className="flex items-center justify-center min-h-screen">
-                <div className="text-xl">Loading...</div>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
             </div>
         );
     }
 
     const selectedRoom = rooms.find(r => r.id === historyRoomId);
-    const roomScanners = allScanners.filter(s => s.status === 'online' && historyRoomId !== null); // Simplified for history view
 
     return (
-        <div className="p-8">
-            <div className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div className="p-8 max-w-7xl mx-auto">
+            <div className="mb-12 flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div>
-                    <h1 className="text-3xl font-bold mb-2">Assets & Discovery</h1>
-                    <p className="text-gray-600">Manage registered assets and tag new devices</p>
+                    <h1 className="text-5xl font-black text-slate-900 uppercase tracking-tight mb-2">Asset <span className="text-blue-600">Vault</span></h1>
+                    <p className="text-slate-500 font-bold uppercase tracking-widest text-xs opacity-60">Complete inventory & signal discovery</p>
                 </div>
 
-                {/* Tab Switcher */}
-                <div className="flex p-1 bg-gray-200 rounded-xl w-fit">
+                <div className="flex items-center gap-6">
+                    {/* Tab Switcher */}
+                    <div className="flex p-1.5 bg-slate-100 rounded-[1.5rem] shadow-inner">
+                        <button
+                            onClick={() => setActiveTab('registered')}
+                            className={`px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'registered' ? 'bg-white shadow-xl text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                        >
+                            Registered ({assets.length})
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('discovered')}
+                            className={`px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'discovered' ? 'bg-white shadow-xl text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                        >
+                            Signals ({discovered.length})
+                        </button>
+                    </div>
+
                     <button
-                        onClick={() => setActiveTab('registered')}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'registered' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={handleOpenManual}
+                        className="bg-slate-900 text-white px-8 py-4 rounded-3xl font-black uppercase tracking-widest text-[10px] shadow-2xl shadow-slate-900/20 hover:bg-blue-600 active:scale-95 transition-all flex items-center gap-2"
                     >
-                        Registered ({assets.length})
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('discovered')}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'discovered' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                        Discovered ({discovered.length})
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" />
+                        </svg>
+                        Manual Entry
                     </button>
                 </div>
             </div>
 
             {/* Search Bar */}
-            <div className="mb-6">
-                <input
-                    type="text"
-                    placeholder={`Search ${activeTab === 'registered' ? 'assets' : 'discovered devices'}...`}
-                    className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition-all shadow-sm"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                />
+            <div className="mb-10">
+                <div className="relative max-w-xl group">
+                    <div className="absolute inset-y-0 left-0 pl-6 flex items-center pointer-events-none">
+                        <svg className="w-5 h-5 text-slate-300 group-focus-within:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                    </div>
+                    <input
+                        type="text"
+                        placeholder={`Search ${activeTab === 'registered' ? 'registered identities' : 'unknown signals'}...`}
+                        className="w-full pl-14 pr-8 py-5 bg-white border border-slate-100 rounded-[1.5rem] focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-slate-800 shadow-sm outline-none"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                </div>
             </div>
 
-            {/* Content Area */}
+            {/* List Components */}
             {activeTab === 'registered' ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {filteredAssets.map((asset) => {
                         const status = getAssetStatus(asset);
                         return (
-                            <div
-                                key={asset.id}
-                                className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer group"
-                                onClick={() => fetchHistory(asset)}
-                            >
-                                <div className="flex items-start justify-between mb-4">
-                                    <div>
-                                        <h3 className="text-lg font-bold group-hover:text-blue-600 transition-colors uppercase tracking-tight">{asset.name}</h3>
-                                        <p className="text-xs text-gray-400 font-mono tracking-widest">{asset.macAddress}</p>
-                                    </div>
-                                    {asset.isBeacon && (
-                                        <span className="px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-full bg-purple-100 text-purple-700 shadow-sm border border-purple-200">
-                                            Beacon
-                                        </span>
-                                    )}
+                            <div key={asset.id} className="bg-white rounded-[2.5rem] shadow-sm border border-slate-50 p-8 hover:shadow-2xl hover:-translate-y-1 transition-all group relative overflow-hidden">
+                                <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => handleOpenEdit(asset)} className="p-2.5 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-all">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                    </button>
+                                    <button onClick={() => handleDeleteAsset(asset.id)} className="p-2.5 bg-red-50 text-red-600 rounded-xl hover:bg-red-600 hover:text-white transition-all">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                    </button>
                                 </div>
-
-                                <div className="space-y-4">
-                                    <div className="flex items-center gap-2">
-                                        <div className={`w-3 h-3 rounded-full ${status.status === 'present' ? 'bg-green-500 animate-pulse ring-4 ring-green-500/20' : 'bg-gray-300'}`} />
-                                        <span className={`text-sm font-black uppercase tracking-widest ${status.status === 'present' ? 'text-green-600' : 'text-gray-400'}`}>
-                                            {status.status === 'present' ? 'Online' : 'Offline'}
+                                <div className="cursor-pointer mb-8" onClick={() => fetchHistory(asset)}>
+                                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight group-hover:text-blue-600 transition-colors mb-1">{asset.name}</h3>
+                                    <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">{asset.macAddress}</p>
+                                </div>
+                                <div className="space-y-6">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-3 h-3 rounded-full ${status.status === 'present' ? 'bg-emerald-500 animate-pulse ring-4 ring-emerald-500/10' : 'bg-slate-200'}`} />
+                                        <span className={`text-[9px] font-black uppercase tracking-widest ${status.status === 'present' ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                            {status.status === 'present' ? 'Spatial Active' : 'Offline'}
                                         </span>
                                     </div>
-
-                                    <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                        <div className="text-[10px] text-gray-400 uppercase font-black tracking-widest mb-1">Current Room</div>
-                                        <div className="font-bold text-gray-800 flex items-center gap-2">
-                                            <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            </svg>
+                                    <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
+                                        <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-2">Location Context</div>
+                                        <div className="font-black text-slate-800 flex items-center gap-2 text-xs uppercase underline decoration-blue-500/30 underline-offset-4">
                                             {status.location}
                                         </div>
                                     </div>
-                                </div>
-                                <div className="mt-6 pt-4 border-t border-gray-50 text-[10px] text-blue-600 font-black uppercase tracking-widest group-hover:pl-2 transition-all">
-                                    Track History & Path →
                                 </div>
                             </div>
                         );
                     })}
                 </div>
             ) : (
-                <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-                    {discoveredLoading && discovered.length === 0 ? (
-                        <div className="py-20 text-center text-gray-500 flex flex-col items-center">
-                            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mb-4"></div>
-                            <span className="font-bold text-sm uppercase tracking-widest">Scanning Bluetooth Spectrum...</span>
-                        </div>
-                    ) : (
-                        <table className="min-w-full divide-y divide-gray-100">
-                            <thead className="bg-gray-50/50">
-                                <tr>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">MAC Address</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Last Detection</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Max Signal</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Approx. Location</th>
-                                    <th className="px-6 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-widest">Register</th>
+                <div className="bg-white rounded-[3rem] shadow-sm border border-slate-50 overflow-hidden">
+                    <table className="min-w-full">
+                        <thead className="bg-slate-50/50 uppercase">
+                            <tr>
+                                <th className="px-10 py-8 text-left text-[10px] font-black text-slate-400 tracking-[0.2em]">Hardware MAC</th>
+                                <th className="px-10 py-8 text-left text-[10px] font-black text-slate-400 tracking-[0.2em]">Latest Detection</th>
+                                <th className="px-10 py-8 text-left text-[10px] font-black text-slate-400 tracking-[0.2em]">Intensity</th>
+                                <th className="px-10 py-8 text-right text-[10px] font-black text-slate-400 tracking-[0.2em]">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50 font-bold">
+                            {filteredDiscovered.map((dev) => (
+                                <tr key={dev.macAddress} className="hover:bg-blue-50/20 transition-colors">
+                                    <td className="px-10 py-8 font-mono text-xs text-slate-800">{dev.macAddress}</td>
+                                    <td className="px-10 py-8 text-slate-500 text-xs">{new Date(dev.lastSeen).toLocaleTimeString()}</td>
+                                    <td className="px-10 py-8">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-full bg-blue-600 rounded-full" style={{ width: `${Math.min(100, (dev.maxRssi + 100) * 2)}%` }}></div>
+                                            </div>
+                                            <span className="text-[10px] font-black text-slate-400">{dev.maxRssi} dBm</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-10 py-8 text-right">
+                                        <button onClick={() => handleOpenTag(dev)} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-blue-600 transition-all shadow-xl shadow-slate-900/10">Register</button>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-50 text-sm">
-                                {filteredDiscovered.map((dev) => (
-                                    <tr key={dev.macAddress} className="hover:bg-blue-50/30 transition-colors group">
-                                        <td className="px-6 py-4 font-mono font-bold text-gray-900">{dev.macAddress}</td>
-                                        <td className="px-6 py-4 text-gray-500 font-medium">{new Date(dev.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
-                                        <td className="px-6 py-4">
-                                            <span className={`px-2 py-1 rounded-full font-black text-[10px] uppercase ${dev.maxRssi > -60 ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                                                {dev.maxRssi} dBm
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="font-bold text-gray-800">{dev.roomName}</div>
-                                            <div className="text-[10px] text-gray-400 font-black uppercase tracking-tighter">via {dev.scannerName}</div>
-                                        </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <button
-                                                onClick={() => {
-                                                    setTaggingDevice(dev);
-                                                    setTagName('');
-                                                    setTagType('phone');
-                                                    setIsBeacon(false);
-                                                }}
-                                                className="bg-blue-600 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-md active:scale-95 hover:shadow-blue-500/20"
-                                            >
-                                                TAG NOW
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                    {filteredDiscovered.length === 0 && !discoveredLoading && (
-                        <div className="py-20 text-center text-gray-500 font-bold uppercase tracking-widest text-sm">Zero unknown devices in range.</div>
-                    )}
+                            ))}
+                        </tbody>
+                    </table>
                 </div>
             )}
 
-            {/* Tagging Modal (Keeping as is but unified style) */}
-            {taggingDevice && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
-                    <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
-                        <div className="p-8 border-b border-gray-100 bg-gradient-to-br from-blue-600 to-indigo-700 text-white">
-                            <h2 className="text-2xl font-black mb-1">Tag Device</h2>
-                            <p className="text-blue-100 font-mono text-xs opacity-80 uppercase tracking-tighter">{taggingDevice.macAddress}</p>
+            {/* Registration Modal (Shared for Manual/Edit/Tag) */}
+            {isRegModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[150] p-4">
+                    <div className="bg-white rounded-[3.5rem] w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-300">
+                        <div className="p-12 border-b border-slate-50 bg-slate-50">
+                            <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tight mb-2">
+                                {editingAsset ? 'Update Identity' : (taggingDevice ? 'Onboard Signal' : 'Manual Entry')}
+                            </h2>
+                            <p className="text-slate-500 font-bold uppercase tracking-widest text-[9px] opacity-60">Provision hardware parameters</p>
                         </div>
-
-                        <form onSubmit={handleTagAsset} className="p-8 space-y-6">
+                        <form onSubmit={handleSaveAsset} className="p-12 space-y-10">
                             <div>
-                                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Asset Name</label>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Hardware MAC Identity</label>
                                 <input
                                     type="text"
                                     required
-                                    autoFocus
-                                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-medium"
-                                    placeholder="e.g. Employee Smartphone"
-                                    value={tagName}
-                                    onChange={(e) => setTagName(e.target.value)}
+                                    disabled={!!editingAsset || !!taggingDevice}
+                                    placeholder="00:00:00:00:00:00"
+                                    className="w-full px-8 py-5 bg-slate-50 border border-slate-200 rounded-[1.5rem] focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 font-bold text-slate-800 disabled:opacity-50 transition-all"
+                                    value={formData.macAddress}
+                                    onChange={(e) => setFormData({ ...formData, macAddress: e.target.value })}
                                 />
                             </div>
-
-                            <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Friendly Locator Identifier</label>
+                                <input
+                                    type="text"
+                                    required
+                                    className="w-full px-8 py-5 bg-slate-50 border border-slate-200 rounded-[1.5rem] focus:ring-4 focus:ring-blue-500/10 transition-all font-bold text-slate-800"
+                                    placeholder="e.g. Asset #301 - Laptop"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-8">
                                 <div>
-                                    <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Device Type</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Classification</label>
                                     <select
-                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 transition-all font-medium"
-                                        value={tagType}
-                                        onChange={(e) => setTagType(e.target.value)}
+                                        className="w-full px-8 py-5 bg-slate-50 border border-slate-200 rounded-[1.5rem] focus:ring-4 focus:ring-blue-500/10 transition-all font-bold text-slate-800"
+                                        value={formData.type}
+                                        onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                                     >
-                                        <option value="phone">Phone</option>
-                                        <option value="laptop">Laptop</option>
-                                        <option value="beacon">Beacon</option>
-                                        <option value="badge">Badge</option>
-                                        <option value="other">Other</option>
+                                        <option value="phone">Smartphone</option>
+                                        <option value="laptop">Portable PC</option>
+                                        <option value="beacon">Stateless Beacon</option>
+                                        <option value="badge">Identity Badge</option>
+                                        <option value="equipment">Machine/Equip</option>
+                                        <option value="other">Generic Object</option>
                                     </select>
                                 </div>
                                 <div className="flex flex-col">
-                                    <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Is Beacon?</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Beacon Logic</label>
                                     <button
                                         type="button"
-                                        onClick={() => setIsBeacon(!isBeacon)}
-                                        className={`flex-1 px-4 py-3 border rounded-xl font-bold text-sm transition-all ${isBeacon ? 'bg-purple-600 border-purple-600 text-white shadow-lg' : 'bg-gray-50 border-gray-200 text-gray-400'}`}
+                                        onClick={() => setFormData({ ...formData, isBeacon: !formData.isBeacon })}
+                                        className={`flex-1 px-8 py-5 border rounded-[1.5rem] font-black text-[10px] transition-all uppercase tracking-widest ${formData.isBeacon ? 'bg-blue-600 border-blue-700 text-white shadow-xl shadow-blue-500/30' : 'bg-slate-50 border-slate-200 text-slate-400'}`}
                                     >
-                                        {isBeacon ? 'YES' : 'NO'}
+                                        {formData.isBeacon ? 'Pulsing' : 'Static'}
                                     </button>
                                 </div>
                             </div>
-
-                            <div className="flex gap-4 pt-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setTaggingDevice(null)}
-                                    className="flex-1 px-4 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition-colors"
-                                >
-                                    CANCEL
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={submitting}
-                                    className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-xl shadow-blue-500/30 hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50"
-                                >
-                                    {submitting ? 'SAVING...' : 'REGISTER ASSET'}
-                                </button>
+                            <div className="flex gap-6 pt-6">
+                                <button type="button" onClick={() => setIsRegModalOpen(false)} className="flex-1 px-8 py-5 rounded-[1.5rem] font-black uppercase tracking-widest text-[10px] text-slate-400 hover:bg-slate-50 transition-colors">Abort</button>
+                                <button type="submit" disabled={submitting} className="flex-1 px-8 py-5 bg-slate-900 text-white rounded-[1.5rem] font-black uppercase tracking-widest text-[10px] shadow-2xl shadow-slate-900/30 hover:bg-blue-600 transition-all active:scale-95">{submitting ? 'Writing...' : (editingAsset ? 'Update Identity' : 'Authorize Asset')}</button>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
 
-            {/* History Modal (ENHANCED WITH PATH MAP) */}
+            {/* History Modal - Reusing the one from before but kept premium */}
             {selectedAsset && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
-                    <div className="bg-white rounded-[2.5rem] w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in fade-in slide-in-from-bottom-8 duration-300">
-                        {/* Header */}
-                        <div className="p-8 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[200] p-4">
+                    <div className="bg-white rounded-[3.5rem] w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in fade-in slide-in-from-bottom-12 duration-500">
+                        <div className="p-10 border-b border-slate-50 flex items-center justify-between bg-slate-900 text-white">
                             <div>
-                                <h2 className="text-2xl font-black uppercase tracking-tight mb-1">{selectedAsset.name}</h2>
-                                <p className="text-xs text-blue-100 font-mono opacity-80">{selectedAsset.macAddress}</p>
+                                <h2 className="text-3xl font-black uppercase tracking-tight mb-2">{selectedAsset.name}</h2>
+                                <p className="text-[10px] text-slate-400 font-mono font-black uppercase tracking-[0.2em]">{selectedAsset.macAddress}</p>
                             </div>
-                            <button
-                                onClick={() => {
-                                    setSelectedAsset(null);
-                                    setHistory(null);
-                                    setHistoryRoomId(null);
-                                }}
-                                className="p-3 hover:bg-white/10 rounded-2xl transition-all border border-white/10 shadow-inner active:scale-95"
-                            >
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
+                            <button onClick={() => { setSelectedAsset(null); setHistory(null); }} className="p-4 hover:bg-white/10 rounded-2xl transition-all border border-white/10"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg></button>
                         </div>
-
-                        <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-                            {/* Left Side: Stats & List */}
-                            <div className="md:w-1/3 overflow-y-auto p-8 border-r border-gray-100 bg-gray-50/50">
-                                {historyLoading ? (
-                                    <div className="flex items-center justify-center py-20">
-                                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-                                    </div>
-                                ) : history ? (
-                                    <div className="space-y-8">
-                                        {/* Room Selector for Path */}
-                                        <div>
-                                            <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-4">Select Room to View Path</h3>
-                                            <div className="grid grid-cols-1 gap-2">
-                                                {Array.from(new Set(history.logs.map(l => l.scannerNode.room.id))).map(roomId => {
-                                                    const room = rooms.find(r => r.id === roomId);
-                                                    const isActive = historyRoomId === roomId;
-                                                    return (
-                                                        <button
-                                                            key={roomId}
-                                                            onClick={() => setHistoryRoomId(roomId)}
-                                                            className={`p-4 rounded-2xl text-left transition-all border ${isActive ? 'bg-blue-600 border-blue-700 text-white shadow-lg shadow-blue-500/30' : 'bg-white border-gray-200 text-gray-700 hover:border-blue-300'}`}
-                                                        >
-                                                            <div className="font-bold">{room?.name || 'Unknown Room'}</div>
-                                                            <div className={`text-[10px] uppercase font-black tracking-tighter ${isActive ? 'text-blue-200' : 'text-gray-400'}`}>
-                                                                {history.logs.filter(l => l.scannerNode.room.id === roomId).length} Recent detections
-                                                            </div>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-4">Movement Transitions</h3>
-                                            <div className="space-y-4">
-                                                {history.presences.length > 0 ? history.presences.map((p: any) => (
-                                                    <div key={p.id} className="relative pl-8 before:content-[''] before:absolute before:left-3 before:top-2 before:bottom-0 before:w-0.5 before:bg-blue-100 last:before:hidden">
-                                                        <div className="absolute left-0 top-1.5 w-6 h-6 rounded-full bg-blue-50 border-4 border-white shadow-sm flex items-center justify-center">
-                                                            <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                                                        </div>
-                                                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
-                                                            <div className="font-bold text-gray-900">{p.room.name}</div>
-                                                            <div className="mt-2 flex flex-col gap-1 text-[10px] text-gray-400 font-bold uppercase tracking-tight">
-                                                                <div>IN: {new Date(p.enteredAt).toLocaleString()}</div>
-                                                                {p.exitedAt && <div>OUT: {new Date(p.exitedAt).toLocaleString()}</div>}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                )) : (
-                                                    <div className="text-center py-8 text-gray-400 bg-white rounded-2xl border border-dashed border-gray-200 font-bold text-xs">No movements recorded.</div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                ) : null}
+                        <div className="flex-1 overflow-hidden flex flex-col md:flex-row bg-slate-50">
+                            <div className="md:w-1/3 overflow-y-auto p-12 border-r border-slate-100 bg-white">
+                                <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.3em] mb-8">Active Zone Paths</h3>
+                                <div className="space-y-4">
+                                    {Array.from(new Set(history?.logs.map(l => l.scannerNode.room.id) || [])).map(roomId => {
+                                        const room = rooms.find(r => r.id === roomId);
+                                        return (
+                                            <button key={roomId} onClick={() => setHistoryRoomId(roomId)} className={`w-full p-6 p-6 rounded-[1.5rem] text-left transition-all border-2 ${historyRoomId === roomId ? 'bg-blue-50 border-blue-600 shadow-xl shadow-blue-500/10' : 'bg-white border-transparent text-slate-600 hover:border-slate-100 shadow-sm font-bold'}`}>
+                                                <div className="font-black uppercase tracking-tight text-xs mb-1">{room?.name || 'Unknown Room'}</div>
+                                                <div className={`text-[9px] uppercase font-black tracking-widest ${historyRoomId === roomId ? 'text-blue-600' : 'text-slate-400'}`}>{history?.logs.filter(l => l.scannerNode.room.id === roomId).length} Signals Logged</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
-
-                            {/* Right Side: Map Visualization */}
-                            <div className="flex-1 bg-white p-8 flex flex-col items-center justify-center overflow-auto relative">
+                            <div className="flex-1 bg-slate-50 p-12 flex flex-col items-center justify-center overflow-hidden">
                                 {selectedRoom ? (
-                                    <div className="w-full flex flex-col items-center">
-                                        <h3 className="text-sm font-black uppercase text-gray-400 tracking-widest mb-6">Historical Movement Path</h3>
-                                        <div className="p-6 bg-gray-50 rounded-[2rem] border-2 border-gray-100 shadow-inner">
-                                            <RoomMap
-                                                room={selectedRoom}
-                                                scanners={allScanners.filter(s => s.status === 'online')} // Simplified
-                                                devices={[]} // We pass path instead
-                                                historyPath={historyPath}
-                                            />
-                                        </div>
-
-                                        <div className="mt-8 grid grid-cols-2 gap-8 text-[10px] font-black uppercase tracking-widest text-gray-400">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-4 h-4 rounded-full bg-blue-500 shadow-lg shadow-blue-500/40"></div>
-                                                <span>Estimated Point</span>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-4 h-4 rounded-full bg-red-500 shadow-lg shadow-red-500/40"></div>
-                                                <span>Current Endpoint</span>
-                                            </div>
+                                    <div className="w-full h-full flex flex-col">
+                                        <div className="mb-10 text-center font-black uppercase tracking-[0.2em] text-[10px] text-slate-400">Spatial Topology: {selectedRoom.name}</div>
+                                        <div className="flex-1 w-full bg-white rounded-[3rem] border border-slate-100 shadow-sm p-8 overflow-hidden">
+                                            <RoomMap room={selectedRoom} scanners={allScanners} devices={[]} historyPath={historyPath} />
                                         </div>
                                     </div>
-                                ) : (
-                                    <div className="text-center">
-                                        <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                            <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                                            </svg>
-                                        </div>
-                                        <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">Select a room to visualize movement</p>
-                                    </div>
-                                )}
+                                ) : <div className="text-slate-300 font-black uppercase tracking-[0.2em] text-xs">Awaiting Spatial Context Initialization...</div>}
                             </div>
                         </div>
-
-                        {/* Footer */}
-                        <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-center">
-                            <button
-                                onClick={() => {
-                                    setSelectedAsset(null);
-                                    setHistory(null);
-                                    setHistoryRoomId(null);
-                                }}
-                                className="px-12 py-3 bg-white border border-gray-200 rounded-2xl text-xs font-black uppercase tracking-widest text-gray-600 hover:bg-gray-100 transition-all shadow-sm active:scale-95"
-                            >
-                                Close Activity Log
-                            </button>
-                        </div>
+                        <div className="p-8 bg-white border-t border-slate-100 flex justify-center"><button onClick={() => { setSelectedAsset(null); setHistory(null); }} className="px-16 py-4 bg-slate-900 text-white rounded-3xl text-[10px] font-black uppercase tracking-[0.3em] hover:bg-blue-600 transition-all shadow-2xl shadow-slate-900/20">Authorize Exit</button></div>
                     </div>
                 </div>
             )}

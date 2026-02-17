@@ -140,9 +140,27 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/assets/:id - Delete asset
 router.delete('/:id', async (req, res) => {
     try {
-        await prisma.asset.delete({
-            where: { id: parseInt(req.params.id) },
+        const id = parseInt(req.params.id);
+
+        // Find asset first to get MAC
+        const asset = await prisma.asset.findUnique({
+            where: { id }
         });
+
+        if (asset) {
+            const macAddress = asset.macAddress;
+
+            // Delete asset (will cascade to assetPresences)
+            await prisma.asset.delete({
+                where: { id },
+            });
+
+            // Set isAsset back to false in logs
+            await prisma.deviceLog.updateMany({
+                where: { macAddress },
+                data: { isAsset: false }
+            });
+        }
 
         res.json({ success: true });
     } catch (error) {

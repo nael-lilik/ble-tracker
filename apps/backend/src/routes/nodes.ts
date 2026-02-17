@@ -23,7 +23,17 @@ router.get('/', async (req, res) => {
                 },
             },
         });
-        res.json(nodes);
+
+        // Dynamically update status based on lastSeen (5-minute timeout)
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const updatedNodes = nodes.map(node => {
+            if (node.status === 'online' && node.lastSeen && new Date(node.lastSeen) < fiveMinutesAgo) {
+                return { ...node, status: 'offline' };
+            }
+            return node;
+        });
+
+        res.json(updatedNodes);
     } catch (error) {
         console.error('Error fetching nodes:', error);
         res.status(500).json({ error: 'Internal server error' });

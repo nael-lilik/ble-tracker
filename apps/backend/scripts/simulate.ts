@@ -13,7 +13,7 @@ const SCANNERS = [
 const ASSETS = [
     { name: 'Boss Laptop', mac: 'AA:AA:AA:AA:AA:01' },
     { name: 'Server Rack 01', mac: 'BB:BB:BB:BB:BB:02' },
-    { name: 'Visitor Badge A', mac: 'CC:CC:CC:CC:CC:03' },
+    { name: 'Visitor Badge A', mac: '5d:f5:c3:bb:d1:33' },
     { name: 'Tool Box Alpha', mac: 'DD:DD:DD:DD:DD:04' },
     { name: 'Asset Tracker 05', mac: 'EE:EE:EE:EE:EE:05' },
 ];
