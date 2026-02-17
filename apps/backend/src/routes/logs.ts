@@ -64,4 +64,35 @@ router.get('/', async (req, res) => {
     }
 });
 
+// GET /api/logs/discovered - Get unique unregistered devices seen recently
+router.get('/discovered', async (req, res) => {
+    try {
+        const { hours = '1', limit = '50' } = req.query;
+        const timeLimit = new Date(Date.now() - parseInt(hours as string) * 60 * 60 * 1000);
+
+        // Raw query to get unique MACs with most recent data
+        // because Prisma groupBy doesn't allow including other fields easily
+        const discovered = await prisma.$queryRaw`
+            SELECT 
+                l.macAddress, 
+                MAX(l.timestamp) as lastSeen, 
+                MAX(l.rssi) as maxRssi,
+                n.name as scannerName,
+                r.name as roomName
+            FROM device_logs l
+            JOIN scanner_nodes n ON l.scannerNodeId = n.id
+            JOIN rooms r ON n.roomId = r.id
+            WHERE l.isAsset = 0 AND l.timestamp >= ${timeLimit}
+            GROUP BY l.macAddress
+            ORDER BY lastSeen DESC
+            LIMIT ${parseInt(limit as string)}
+        `;
+
+        res.json(discovered);
+    } catch (error) {
+        console.error('Error fetching discovered devices:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 export default router;

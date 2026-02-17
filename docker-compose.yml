@@ -1,25 +1,45 @@
 version: '3.8'
 
 services:
-  mysql:
+  db:
     image: mysql:8.0
-    container_name: ble-tracker-mysql
-    restart: unless-stopped
+    container_name: ble-tracker-db
+    restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
       MYSQL_DATABASE: ble_tracker
-      MYSQL_USER: bleuser
-      MYSQL_PASSWORD: blepassword
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-    networks:
-      - ble-tracker-network
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: ble-tracker-be
+    restart: always
+    environment:
+      DATABASE_URL: mysql://root:${DB_ROOT_PASSWORD:-rootpassword}@db:3306/ble_tracker
+      SECRET_SALT: ${SECRET_SALT:-default_salt_123}
+      PORT: 3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    container_name: ble-tracker-fe
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
 
 volumes:
   mysql_data:
-
-networks:
-  ble-tracker-network:
-    driver: bridge

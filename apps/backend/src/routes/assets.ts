@@ -27,30 +27,58 @@ router.get('/', async (req, res) => {
     }
 });
 
-// GET /api/assets/:id - Get single asset
-router.get('/:id', async (req, res) => {
+// GET /api/assets/:id/history - Get asset movement history
+router.get('/:id/history', async (req, res) => {
     try {
+        const { limit } = req.query;
+        const assetId = parseInt(req.params.id);
+
         const asset = await prisma.asset.findUnique({
-            where: { id: parseInt(req.params.id) },
-            include: {
-                assetPresences: {
-                    include: {
-                        room: true,
-                    },
-                    orderBy: {
-                        enteredAt: 'desc',
-                    },
-                },
-            },
+            where: { id: assetId }
         });
 
         if (!asset) {
             return res.status(404).json({ error: 'Asset not found' });
         }
 
-        res.json(asset);
+        // Get movement history (asset presences)
+        const presences = await prisma.assetPresence.findMany({
+            where: { assetId },
+            include: {
+                room: {
+                    include: { site: true }
+                }
+            },
+            orderBy: { enteredAt: 'desc' },
+            take: limit ? parseInt(limit as string) : 50
+        });
+
+        // Get detailed raw logs for path visualization (last 24h by default)
+        const logs = await prisma.deviceLog.findMany({
+            where: {
+                macAddress: asset.macAddress,
+                timestamp: {
+                    gte: new Date(Date.now() - 24 * 60 * 60 * 1000)
+                }
+            },
+            include: {
+                scannerNode: {
+                    include: {
+                        room: true
+                    }
+                }
+            },
+            orderBy: { timestamp: 'desc' },
+            take: limit ? parseInt(limit as string) * 2 : 100
+        });
+
+        res.json({
+            asset,
+            presences,
+            logs
+        });
     } catch (error) {
-        console.error('Error fetching asset:', error);
+        console.error('Error fetching asset history:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -72,6 +100,12 @@ router.post('/', async (req, res) => {
                 description,
                 isBeacon: isBeacon || false,
             },
+        });
+
+        // Update existing logs for this MAC address to mark them as asset logs
+        await prisma.deviceLog.updateMany({
+            where: { macAddress },
+            data: { isAsset: true }
         });
 
         res.status(201).json(asset);
