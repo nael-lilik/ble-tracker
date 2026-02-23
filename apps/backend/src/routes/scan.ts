@@ -13,11 +13,11 @@ router.post('/', async (req, res) => {
         const body = req.body;
         const scans = Array.isArray(body) ? body : [body];
 
-        console.log(`[${requestTime}] 📡 Received scan data:`, {
-            count: scans.length,
-            isArray: Array.isArray(body),
-            firstScan: scans[0]
-        });
+        // console.log(`[${requestTime}] 📡 Received scan data:`, {
+        //     count: scans.length,
+        //     isArray: Array.isArray(body),
+        //     firstScan: scans[0]
+        // });
 
         if (scans.length === 0) {
             console.log(`[${requestTime}] ❌ Empty scan data received`);
@@ -76,12 +76,21 @@ router.post('/', async (req, res) => {
             }
 
             // Store device log
+            let finalTimestamp = new Date();
+            if (timestamp) {
+                const parsedDate = new Date(timestamp);
+                // If timestamp is before 2020, it's likely uptime (millis) or invalid RTC
+                if (parsedDate.getFullYear() > 2020) {
+                    finalTimestamp = parsedDate;
+                }
+            }
+
             const deviceLog = await prisma.deviceLog.create({
                 data: {
                     macAddress: mac,
                     scannerNodeId: scannerNode.id,
                     rssi,
-                    timestamp: timestamp ? new Date(timestamp) : new Date(),
+                    timestamp: finalTimestamp,
                     isAsset,
                     hashedMac,
                 },

@@ -29,6 +29,10 @@ interface DeviceLog {
             name: string;
         };
     };
+    assetName?: string;
+    assetType?: string;
+    manufacturer?: string;
+    typeGuess?: string;
 }
 
 interface Stats {
@@ -97,6 +101,17 @@ export default function Home() {
             console.error('Error fetching data:', error);
             setLoading(false);
         }
+    };
+
+    const getAssetDetails = (deviceLogs: DeviceLog[]) => {
+        if (!deviceLogs || deviceLogs.length === 0) return null;
+        return {
+            isAsset: deviceLogs[0].isAsset,
+            type: deviceLogs[0].assetType || deviceLogs[0].typeGuess,
+            name: deviceLogs[0].assetName, // Assuming assetName exists in DeviceLog or is derived
+            manufacturer: deviceLogs[0].manufacturer,
+            typeGuess: deviceLogs[0].typeGuess
+        };
     };
 
     const getTimeAgo = (dateString: string) => {
@@ -199,8 +214,40 @@ export default function Home() {
                                     <div>
                                         <div className="font-mono text-xs font-bold text-slate-700">{log.macAddress}</div>
                                         <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                                            {log.scannerNode.room.name} • <span className="text-blue-500">{log.rssi}dBm</span>
+                                            {log.scannerNode.room.name} • {log.scannerNode.name} • <span className="text-blue-500">{log.rssi}dBm</span>
                                         </div>
+                                        {log.manufacturer && !log.isAsset && (
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <div className="text-[9px] text-slate-300 font-bold uppercase italic">
+                                                    Vendor: {log.manufacturer}
+                                                </div>
+                                                {log.typeGuess === 'smartphone' && (
+                                                    <span className="bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter">
+                                                        Likely Smartphone
+                                                    </span>
+                                                )}
+                                                {log.typeGuess === 'laptop' && (
+                                                    <span className="bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter">
+                                                        Likely Laptop
+                                                    </span>
+                                                )}
+                                                {log.typeGuess === 'audio' && (
+                                                    <span className="bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter">
+                                                        Audio/Speaker
+                                                    </span>
+                                                )}
+                                                {log.typeGuess === 'tv' && (
+                                                    <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter">
+                                                        Smart TV
+                                                    </span>
+                                                )}
+                                                {log.typeGuess === 'tag' && (
+                                                    <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter">
+                                                        Tracking Tag
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../index';
+import { getVendorInfo } from '../utils/oui';
 
 const router = Router();
 
@@ -57,7 +58,26 @@ router.get('/', async (req, res) => {
             take: maxLimit,
         });
 
-        res.json(logs);
+        // Fetch asset info for logs that are assets
+        const assetMacs = [...new Set(logs.filter(l => l.isAsset).map(l => l.macAddress))];
+        const assets = await prisma.asset.findMany({
+            where: { macAddress: { in: assetMacs } }
+        });
+
+        const assetMap = new Map(assets.map(a => [a.macAddress, a]));
+
+        const logsWithInfo = logs.map(log => {
+            const vendor = getVendorInfo(log.macAddress);
+            return {
+                ...log,
+                assetName: assetMap.get(log.macAddress)?.name,
+                assetType: assetMap.get(log.macAddress)?.type,
+                manufacturer: vendor.name,
+                typeGuess: vendor.type
+            };
+        });
+
+        res.json(logsWithInfo);
     } catch (error) {
         console.error('Error fetching logs:', error);
         res.status(500).json({ error: 'Internal server error' });

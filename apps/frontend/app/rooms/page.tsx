@@ -10,6 +10,7 @@ export default function RoomsPage() {
     const [devices, setDevices] = useState<DeviceDetection[]>([]);
     const [showHeatmap, setShowHeatmap] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [lastFetch, setLastFetch] = useState<string>('Never');
 
     // Registration Modal (for map tagging)
     const [taggingMac, setTaggingMac] = useState<string | null>(null);
@@ -68,12 +69,15 @@ export default function RoomsPage() {
             if (res.ok) {
                 const logs = await res.json();
                 const now = new Date().getTime();
-                // Show devices seen in last 2 minutes for a more "alive" map
+                // Show devices seen in last 5 minutes (increased from 2m to be more resilient)
                 const recentLogs = logs.filter((log: any) => {
                     const logTime = new Date(log.timestamp).getTime();
-                    return (now - logTime) < 120000;
+                    // Handle potential future timestamps from skew and keep it reasonable
+                    const diff = now - logTime;
+                    return diff < 300000 && diff > -60000;
                 });
                 setDevices(recentLogs);
+                setLastFetch(new Date().toLocaleTimeString());
             }
         } catch (error) {
             console.error('Error fetching devices:', error);
@@ -120,7 +124,9 @@ export default function RoomsPage() {
             <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div>
                     <h1 className="text-5xl font-black text-slate-900 uppercase tracking-tight mb-2">Spatial <span className="text-blue-600">Explorer</span></h1>
-                    <p className="text-slate-500 font-bold uppercase tracking-widest text-xs opacity-60">Real-time room topology & device localization</p>
+                    <p className="text-slate-500 font-bold uppercase tracking-widest text-xs opacity-60">
+                        Real-time room topology & device localization • Updated: <span className="text-blue-600">{lastFetch}</span>
+                    </p>
                 </div>
 
                 <div className="flex gap-4">
